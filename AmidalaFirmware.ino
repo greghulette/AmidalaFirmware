@@ -3,9 +3,9 @@
 ///////////////////////////////////////////////
 
 #define FIRMWARE_NAME F("Amidala RC")
-#define VERSION_NUM   F("1.0")
+#define VERSION_NUM   F("1.1")
 #define BUILD_NUM     F("1")
-#define BUILD_DATE    F("4-8-2021")
+#define BUILD_DATE    F(__DATE__)
 
 #define DRIVE_SYSTEM_PWM                1
 #define DRIVE_SYSTEM_SABER              2
@@ -31,7 +31,7 @@
 
 #define MAXIMUM_SPEED        1.0f   // percentage 0.0 - 1.0. default 50%
 #define MAXIMUM_GUEST_SPEED  0.5f   // percentage 0.0 - 1.0. default 30%
-#define DOME_MAXIMUM_SPEED   0.5f   // percentage 0.0 - 1.0. default 50%
+#define DOME_MAXIMUM_SPEED   1.0f   // percentage 0.0 - 1.0. default 100%
 
 // Scale value of 1 means instant. Scale value of 100 means that the throttle will increase 1/100 every 25ms
 #define ACCELERATION_SCALE   100 
@@ -39,6 +39,25 @@
 #define DECELRATION_SCALE    20
 
 #define SCALING              false   // set to true if acceleration/decelleration should be applied
+
+#define DEFAULT_DOME_HOME_POSITION          50
+#define DEFAULT_DOME_ACCELERATION_SCALE     20
+#define DEFAULT_DOME_DECELERATION_SCALE     50
+#define DEFAULT_DOME_HOME_MIN_DELAY         6
+#define DEFAULT_DOME_HOME_MAX_DELAY         8
+#define DEFAULT_DOME_SEEK_MIN_DELAY         6
+#define DEFAULT_DOME_SEEK_MAX_DELAY         8
+#define DEFAULT_DOME_TARGET_MIN_DELAY       0
+#define DEFAULT_DOME_TARGET_MAX_DELAY       1
+#define DEFAULT_DOME_SEEK_LEFT              80
+#define DEFAULT_DOME_SEEK_RIGHT             80
+#define DEFAULT_DOME_FUDGE                  2
+#define DEFAULT_DOME_SPEED_HOME             40
+#define DEFAULT_DOME_SPEED_SEEK             60
+#define DEFAULT_DOME_SPEED_TARGET           100
+#define DEFAULT_DOME_SPEED_MIN              15
+#define DEFAULT_DOME_TIMEOUT                5
+#define DEFAULT_DOME_INVERTED               false
 
 #if DRIVE_SYSTEM == DRIVE_SYSTEM_SABER
 #define DRIVE_SERIAL         Serial3
@@ -87,17 +106,17 @@
 ////////////////////////////////
 
 #define USE_DEBUG
+// #define USE_DOME_SENSOR_SERIAL_DEBUG
 //#define USE_POCKET_REMOTE_DEBUG
 // #define USE_PPM_DEBUG
 //#define USE_MOTOR_DEBUG
-#define USE_DOME_DEBUG
+//#define USE_DOME_DEBUG
 // #define USE_SERVO_DEBUG
 // #define USE_VERBOSE_SERVO_DEBUG
 
 ////////////////////////////////
 
 #include "ReelTwo.h"
-#include "core/AnalogMonitor.h"
 #include "audio/VMusic.h"
 #if DRIVE_SYSTEM  == DRIVE_SYSTEM_PWM
  #include "drive/TankDrivePWM.h"
@@ -524,6 +543,7 @@ public:
     void printHelp();
     void showLoadEEPROM(bool load = false);
     void showCurrentConfiguration();
+    void writeCurrentConfiguration();
     void monitorToggle();
     void monitorOutput();
     void setMinimal(bool minimal)
@@ -735,12 +755,8 @@ public:
         fVMusic(VMUSIC_SERIAL),
         fDriveStick(this),
         fDomeStick(this),
-    #ifdef DOME_SENSOR_SERIAL
         fDomeRing(DOME_SENSOR_SERIAL),
         fAutoDome(fDomeRing),
-    #else
-        fAutoDome(params),
-    #endif
     #if DRIVE_SYSTEM == DRIVE_SYSTEM_SABER
         fTankDrive(128, DRIVE_SERIAL, fDriveStick),
     #elif DRIVE_SYSTEM == DRIVE_SYSTEM_PWM
@@ -979,20 +995,23 @@ public:
         Gesture   slowgest;
         Gesture   domegest;
 
-        uint16_t  domepos;
+        uint16_t  domepos;      // delete?
         uint16_t  domehome;
         uint8_t   domemode;
-        uint8_t   domemindelay;
-        uint8_t   domemaxdelay;
+        uint8_t   domehomemin;
+        uint8_t   domehomemax;
+        uint8_t   domeseekmin;
+        uint8_t   domeseekmax;
         uint8_t   domeseekr;
         uint8_t   domeseekl;
         uint8_t   domefudge;
+        uint8_t   domespeed;
         uint8_t   domespeedhome;
         uint8_t   domespeedseek;
-        uint16_t  domespmin;
-        uint16_t  domespmax;
-        bool      domech6;
-        bool      domeimu;
+        uint16_t  domespmin;    // only for analog
+        uint16_t  domespmax;    // only for analog
+        bool      domech6;      // delete?
+        bool      domeimu;      // delete?
         bool      domeflip;
 
         constexpr unsigned getSoundBankCount()
@@ -1046,21 +1065,24 @@ public:
                 goslow = false;
                 j1adjv = 0;
                 j1adjh = 0;
-                domehome = 270;
+                domehome = DEFAULT_DOME_HOME_POSITION;
                 domepos = domehome;
                 domemode = 1;
-                domemindelay = 1;
-                domemaxdelay = 8;
-                domeseekr = 80;
-                domeseekl = 80;
-                domefudge = 2;
-                domespeedhome = 40;
-                domespeedseek = 30;
+                domehomemin = DEFAULT_DOME_HOME_MIN_DELAY;
+                domehomemax = DEFAULT_DOME_HOME_MAX_DELAY;
+                domeseekmin = DEFAULT_DOME_SEEK_MIN_DELAY;
+                domeseekmax = DEFAULT_DOME_SEEK_MAX_DELAY;
+                domeseekl = DEFAULT_DOME_SEEK_LEFT;
+                domeseekr = DEFAULT_DOME_SEEK_RIGHT;
+                domefudge = DEFAULT_DOME_FUDGE;
+                domespeed = DOME_MAXIMUM_SPEED;
+                domespeedhome = DEFAULT_DOME_SPEED_HOME;
+                domespeedseek = DEFAULT_DOME_SPEED_SEEK;
                 domespmin = 42;
                 domespmax = 935;
                 domech6 = false;
-                domeflip = false;
-                domeimu = false;
+                domeflip = DEFAULT_DOME_INVERTED;
+                domeimu = true; /* no longer used */
             }
             size_t offs = 0;
             if (EEPROM.read(offs) == 'D' && EEPROM.read(offs+1) == 'B' &&
@@ -1172,132 +1194,6 @@ public:
             sInited = true;
         }
     };
-
-#ifndef DOME_SENSOR_SERIAL
-    class AmidalaAutoDome : public DomePosition /*, public CommandEvent*/
-    {
-    public:
-        AmidalaAutoDome(AmidalaParameters& params) :
-            fDomePosition(ANALOG1_PIN),
-            fParams(params)
-        {
-        }
-
-        // virtual void handleCommand(const char* cmd) override
-        // {
-        //     if (*cmd++ != 'D' || *cmd++ != 'P')
-        //         return;
-        //     fDomePos = atoi(cmd);
-        //     DEBUG_PRINTLN(fDomePos);
-        // }
-
-        virtual Mode getDomeMode() override
-        {
-            if (!fParams.domeimu)
-                return kOff;
-            switch (fParams.domemode)
-            {
-                case 1:
-                    return kOff;
-                case 2:
-                    return kHome;
-                case 3:
-                    return kRandom;
-                case 4:
-                    return kTarget;
-            }
-            return kOff;
-        }
-
-        virtual void setDomeMode(Mode mode) override
-        {
-            switch (mode)
-            {
-                case kOff:
-                    fParams.domemode = 1;
-                    break;
-                case kHome:
-                    fParams.domemode = 2;
-                    break;
-                case kRandom:
-                    fParams.domemode = 3;
-                    break;
-                case kTarget:
-                    fParams.domemode = 4;
-                    break;
-            }
-        }
-
-        virtual bool getDomeFlip() override
-        {
-            return fParams.domeflip;
-        }
-
-        virtual float easingMethod(float completion)
-        {
-            return completion;
-        }
-
-        virtual float getDomeSpeedHome() override
-        {
-            return float(fParams.domespeedhome) / 100.0;
-        }
-
-        virtual unsigned getDomeFudge() override
-        {
-            return fParams.domefudge;
-        }
-
-        virtual unsigned getDomeSeekLeft() override
-        {
-            return fParams.domeseekl;
-        }
-
-        virtual unsigned getDomeSeekRight() override
-        {
-            return fParams.domeseekr;
-        }
-
-        virtual unsigned getDomeMinDelay() override
-        {
-            return fParams.domemindelay;
-        }
-
-        virtual unsigned getDomeMaxDelay() override
-        {
-            return fParams.domemaxdelay;
-        }
-
-        virtual unsigned getDomeHome() override
-        {
-            return fParams.domehome;
-        }
-
-        virtual unsigned getDomeTargetPosition() override
-        {
-            return fParams.domepos;
-        }
-
-        virtual unsigned getDomePosition() override
-        {
-            unsigned val = fDomePosition.getValue();
-            // unsigned val = analogRead(ANALOG1_PIN);
-            val = min(max(val, fParams.domespmin), fParams.domespmax);
-            int pos = map(val, fParams.domespmin, fParams.domespmax, 0, 359);
-                // DEBUG_PRINTLN("POS "+String(fDomePos)+ " ANALOG: "+String(pos));
-            // if (abs(pos-fDomePos) > 20)
-            // {
-            //     DEBUG_PRINTLN("POS "+String(fDomePos)+ " ANALOG: "+String(pos));
-            // }
-            // return fDomePos;
-            return pos;
-        }
-
-    protected:
-        AnalogMonitor fDomePosition;
-        AmidalaParameters& fParams;
-    };
-#endif
 
     class XBeePocketRemote : public JoystickController
     {
@@ -1687,12 +1583,8 @@ public:
     DomeController fDomeStick;
     XBeePocketRemote* remote[2] = { &fDriveStick, &fDomeStick };
     AmidalaParameters params;
-#ifdef DOME_SENSOR_SERIAL
     DomeSensorRingSerialListener fDomeRing;
     DomePosition fAutoDome;
-#else
-    AmidalaAutoDome fAutoDome;
-#endif
     // I2CReceiver fI2C;
 #if DRIVE_SYSTEM == DRIVE_SYSTEM_SABER
     TankDriveSabertooth fTankDrive;
@@ -1769,7 +1661,7 @@ public:
 
     unsigned getDomePosition()
     {
-        return fAutoDome.getDomePosition();
+        return fAutoDome.getHomeRelativeDomePosition();
     }
 
     bool getDomeIMU()
@@ -1779,7 +1671,7 @@ public:
 
     void setDomeHome(unsigned pos)
     {
-        params.domehome = pos;
+        fAutoDome.setDomeHomePosition(pos);
     }
 
     unsigned getVolume()
@@ -1917,6 +1809,15 @@ public:
         pinMode(SEL2_PIN, INPUT_PULLUP);
         pinMode(RCSEL_PIN, INPUT_PULLUP);
 
+        setDigitalPin(1, false);
+        setDigitalPin(2, false);
+        setDigitalPin(3, false);
+        setDigitalPin(4, false);
+        setDigitalPin(5, false);
+        setDigitalPin(6, false);
+        setDigitalPin(7, false);
+        setDigitalPin(8, false);
+
         fXBee.setSerial(XBEE_SERIAL);
 
         fTankDrive.setMaxSpeed(MAXIMUM_SPEED);
@@ -1930,6 +1831,30 @@ public:
 
     #ifdef DOME_DRIVE
         fDomeDrive.setMaxSpeed(DOME_MAXIMUM_SPEED);
+        fDomeDrive.setInverted(DEFAULT_DOME_INVERTED);
+        fDomeDrive.setScaling(false);
+        fDomeDrive.setThrottleAccelerationScale(DEFAULT_DOME_ACCELERATION_SCALE);
+        fDomeDrive.setThrottleDecelerationScale(DEFAULT_DOME_DECELERATION_SCALE);
+
+        fAutoDome.setTimeout(DEFAULT_DOME_TIMEOUT);
+        fAutoDome.setDomeHomePosition(DEFAULT_DOME_HOME_POSITION);
+        fAutoDome.setDomeSeekMinDelay(DEFAULT_DOME_HOME_MIN_DELAY);
+        fAutoDome.setDomeSeekMaxDelay(DEFAULT_DOME_HOME_MAX_DELAY);
+        fAutoDome.setDomeSeekLeftDegrees(DEFAULT_DOME_SEEK_LEFT);
+        fAutoDome.setDomeSeekRightDegrees(DEFAULT_DOME_SEEK_RIGHT);
+        fAutoDome.setDomeSeekSpeed(DEFAULT_DOME_SPEED_SEEK);
+
+        fAutoDome.setDomeHomeSpeed(DEFAULT_DOME_SPEED_HOME);
+        fAutoDome.setDomeHomeMinDelay(DEFAULT_DOME_HOME_MIN_DELAY);
+        fAutoDome.setDomeHomeMaxDelay(DEFAULT_DOME_HOME_MAX_DELAY);
+
+        fAutoDome.setDomeTargetSpeed(DEFAULT_DOME_SPEED_TARGET);
+        fAutoDome.setDomeTargetMinDelay(DEFAULT_DOME_TARGET_MIN_DELAY);
+        fAutoDome.setDomeTargetMaxDelay(DEFAULT_DOME_TARGET_MAX_DELAY);
+
+        fAutoDome.setDomeMinSpeed(DEFAULT_DOME_SPEED_MIN);
+        fAutoDome.setDomeFudgeFactor(DEFAULT_DOME_FUDGE);
+
         fDomeDrive.setDomePosition(&fAutoDome);
     #endif
 
@@ -1957,7 +1882,7 @@ public:
         fVMusic.process();
 
         // TODO THIS IS HARDCODED FOR PWM!!!
-        if (servoDispatch.currentPos(0) != 1500 || servoDispatch.currentPos(1) != 1500)
+        if (servoDispatch.currentPos(0) != 1450 || servoDispatch.currentPos(1) != 1500)
         {
             // digital out 7
             if (fDriveStateMillis + 1000 < millis())
@@ -1974,22 +1899,22 @@ public:
         }
         
         // TODO THIS IS HARDCODED FOR PWM!!!
-        if (servoDispatch.currentPos(3) != 1500)
+        if (fDomeDrive.isMoving() && fDomeDrive.idle())
         {
             if (getDomeThrottle() < 0.1 && fDomeStateMillis + 1000 < millis())
             {
                 // digital out 8
-                //DEBUG_PRINTLN("DOME ACTIVE");
+                DEBUG_PRINTLN("DOME ACTIVE");
                 setDigitalPin(8, true);
                 fDomeStateMillis = millis();
             }
         }
         // TODO THIS IS HARDCODED FOR PWM!!!
-        else if (getDigitalPin(8) && fDomeStateMillis + 1000 < millis())
+        else if (getDigitalPin(8))
         {
-            //DEBUG_PRINTLN("DOME INACTIVE");
+            DEBUG_PRINTLN("DOME INACTIVE");
             setDigitalPin(8, false);
-            fDriveStateMillis = millis();
+            fDomeStateMillis = millis();
         }
 
         if (checkRCMode() &&
@@ -2505,11 +2430,14 @@ void AmidalaConsole::showCurrentConfiguration()
         print(F("domehome: ")); println(params.domehome);
         print(F("domeflip: ")); println(params.domeflip ? F("true") : F("false"));
         print(F("domegest: ")); println(params.domegest.getGestureString(gesture));
-        print(F("domemindelay: ")); println(params.domemindelay);
-        print(F("domemaxdelay: ")); println(params.domemaxdelay);
+        print(F("domehomemin: ")); println(params.domehomemin);
+        print(F("domehomemax: ")); println(params.domehomemax);
+        print(F("domeseekmin: ")); println(params.domeseekmin);
+        print(F("domeseekmax: ")); println(params.domeseekmax);
         print(F("domefudge: ")); println(params.domefudge);
         print(F("domeseekl: ")); println(params.domeseekl);
         print(F("domeseekr: ")); println(params.domeseekr);
+        print(F("domespeed: ")); println(params.domespeed);
         print(F("domespeedhome: ")); println(params.domespeedhome);
         print(F("domespeedseek: ")); println(params.domespeedseek);
         print(F("domech6: ")); println(params.domech6 ? F("true") : F("false"));
@@ -2545,6 +2473,26 @@ void AmidalaConsole::showCurrentConfiguration()
     println(params.fst);
     // Not supported
     println(F("Remote Console Cmd On"));
+}
+
+void AmidalaConsole::writeCurrentConfiguration()
+{
+    AmidalaController::AmidalaParameters& params = fController->params;
+    size_t offs = 0xea;
+    for (unsigned i = 0; i < sizeof(params.S)/sizeof(params.S[0]); i++)
+    {
+        /*EEPROM.put(offs, S[i].min);*/ offs += sizeof(params.S[i].min);
+        /*EEPROM.put(offs, S[i].max);*/ offs += sizeof(params.S[i].max);
+        /*EEPROM.put(offs, S[i].n);*/ offs += sizeof(params.S[i].n);
+        /*EEPROM.put(offs, S[i].d);*/ offs += sizeof(params.S[i].d);
+        /*EEPROM.put(offs, S[i].t);*/ offs += sizeof(params.S[i].t);
+        /*EEPROM.put(offs, S[i].r);*/ offs += sizeof(params.S[i].r);
+        //S[i].s = (uint8_t)ceil((float)EEPROM.read(offs++) / 255.0f * 10) * 10;
+        offs += sizeof(params.S[i].s);
+        EEPROM.put(offs, params.S[i].minpulse); offs += sizeof(params.S[i].minpulse);
+        EEPROM.put(offs, params.S[i].maxpulse); offs += sizeof(params.S[i].maxpulse);
+    }
+    println(F("Updated"));
 }
 
 void AmidalaConsole::monitorOutput()
@@ -2831,7 +2779,11 @@ bool numberparams(const char* cmd, uint8_t &argcount, uint8_t* args, uint8_t max
 
 bool AmidalaConsole::processConfig(const char* cmd)
 {
+    bool boolarg;
+    uint32_t intarg;
     AmidalaController::AmidalaParameters& params = fController->params;
+    DomePosition& autoDome = fController->fAutoDome;
+    DomeDrive* domeDrive = &fController->fDomeDrive;
     if (startswith(cmd, "sb="))
     {
         if (params.sbcount < params.getSoundBankCount())
@@ -3089,30 +3041,118 @@ bool AmidalaConsole::processConfig(const char* cmd)
              gestureparam(cmd, "ackgest=", params.ackgest) ||
              gestureparam(cmd, "slowgest=", params.slowgest) ||
              gestureparam(cmd, "domegest=", params.domegest) ||
-             intparam(cmd, "domepos=", params.domepos, 0, 360) ||
-             intparam(cmd, "domehome=", params.domehome, 0, 360) ||
-             intparam(cmd, "domemode=", params.domemode, 1, 5) ||
-             intparam(cmd, "domemindelay=", params.domemindelay, 1, 255) ||
-             intparam(cmd, "domemaxdelay=", params.domemaxdelay, 1, 255) ||
-             intparam(cmd, "domeseekr=", params.domeseekr, 1, 180) ||
-             intparam(cmd, "domeseekl=", params.domeseekl, 1, 180) ||
-             intparam(cmd, "domefudge=", params.domefudge, 1, 20) ||
-             intparam(cmd, "domespeedhome=", params.domespeedhome, 1, 100) ||
-             intparam(cmd, "domespeedseek=", params.domespeedhome, 1, 100) ||
-             intparam(cmd, "domespmin", params.domespmin, 0, 100) ||
-             intparam(cmd, "domespmax", params.domespmin, 900, 1023) ||
              boolparam(cmd, "startup=", params.startup) ||
              boolparam(cmd, "rndon=", params.rndon) ||
              boolparam(cmd, "ackon=", params.ackon) ||
              boolparam(cmd, "mix12=", params.mix12) ||
              boolparam(cmd, "auto=", params.autocorrect) ||
              boolparam(cmd, "goslow=", params.goslow) ||
-             boolparam(cmd, "domeimu=", params.domeimu) ||
              boolparam(cmd, "domeflip=", params.domeflip) ||
              boolparam(cmd, "domech6=", params.domech6))
     {
         return true;
     }
+    else if (boolparam(cmd, "domeimu=", boolarg))
+    {
+        return true;
+    }
+    else if (intparam(cmd, "domespeed=", params.domespeed, 0, 100))
+    {
+        domeDrive->setMaxSpeed(params.domespeed);
+        return true;
+    }
+    else if (intparam(cmd, "domepos=", intarg, 0, 360))
+    {
+        static int sDomeFudge = params.domefudge;
+        static DomePosition& sAutoDome = autoDome;
+        Serial.print("NEWPOS: "); Serial.println(intarg);
+        autoDome.setDomeHomeRelativeTargetPosition(intarg);
+        autoDome.setDomeFudgeFactor(1);
+        autoDome.setTargetReached([]() {
+            Serial.println("Reached Target");
+            sAutoDome.setDomeFudgeFactor(sDomeFudge);
+            sAutoDome.setDomeMode(sAutoDome.getDomeDefaultMode());
+        });
+        autoDome.setDomeMode(DomePosition::kTarget);
+        return true;
+    }
+    else if (intparam(cmd, "domehome=", params.domehome, 0, 360))
+    {
+        autoDome.setDomeHomePosition(params.domehome);
+        return true;
+    }
+    else if (intparam(cmd, "domemode=", params.domemode, 1, 5))
+    {
+        switch (params.domemode)
+        {
+            case 1:
+                autoDome.setDomeDefaultMode(DomePosition::kOff);
+                break;
+            case 2:
+                autoDome.setDomeDefaultMode(DomePosition::kHome);
+                break;
+            case 3:
+                autoDome.setDomeDefaultMode(DomePosition::kRandom);
+                break;
+        }
+        return true;
+    }
+    else if (intparam(cmd, "domehomemin=", params.domehomemin, 1, 255))
+    {
+        autoDome.setDomeHomeMinDelay(params.domehomemin);
+        return true;
+    }
+    else if (intparam(cmd, "domehomemax=", params.domehomemax, 1, 255))
+    {
+        autoDome.setDomeHomeMaxDelay(params.domehomemax);
+        return true;
+    }
+    else if (intparam(cmd, "domeseekmin=", params.domehomemin, 1, 255))
+    {
+        autoDome.setDomeSeekMinDelay(params.domehomemin);
+        return true;
+    }
+    else if (intparam(cmd, "domeseekmax=", params.domehomemax, 1, 255))
+    {
+        autoDome.setDomeSeekMaxDelay(params.domehomemax);
+        return true;
+    }
+    else if (intparam(cmd, "domeseekr=", params.domeseekr, 1, 180))
+    {
+        autoDome.setDomeSeekRightDegrees(params.domeseekr);
+        return true;
+    }
+    else if (intparam(cmd, "domeseekl=", params.domeseekl, 1, 180))
+    {
+        autoDome.setDomeSeekLeftDegrees(params.domeseekl);
+        return true;
+    }
+    else if (intparam(cmd, "domefudge=", params.domefudge, 1, 20))
+    {
+        autoDome.setDomeFudgeFactor(params.domefudge);
+        return true;
+    }
+    else if (intparam(cmd, "domespeedhome=", params.domespeedhome, 1, 100))
+    {
+        autoDome.setDomeHomeSpeed(params.domespeedhome);
+        return true;
+    }
+    else if (intparam(cmd, "domespeedseek=", params.domespeedseek, 1, 100))
+    {
+        autoDome.setDomeSeekSpeed(params.domespeedhome);
+        return true;
+    }
+    else if (strcmp(cmd, "reboot") == 0)
+    {
+        void (*resetArduino)() = NULL;
+        resetArduino();
+    }
+    // else if (intparam(cmd, "domespmin=", params.domespmin, 0, 100))
+    // {
+    // }
+    // else if (intparam(cmd, "domespmax=", params.domespmin, 900, 1023))
+    // {
+    // }
     return false;
 }
 
@@ -3146,6 +3186,9 @@ void AmidalaConsole::processCommand(const char* cmd)
                 return;
             case 'm':
                 monitorToggle();
+                return;
+            case 'w':
+                writeCurrentConfiguration();
                 return;
         }
     }
