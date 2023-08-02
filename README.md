@@ -2,4 +2,9 @@
 
 This sketch provides a complete drive system running on an Mega2560. It depends on the [Reeltwo](https://reeltwo.github.io/Reeltwo) library. It is configured to two XBee pocket remotes.
 
-Initial check-in
+## Libraries Used
+
+<ul>
+<li>https://github.com/reeltwo/Reeltwo</li>
+<li>https://github.com/reeltwo/ReeltwoAudio</li>
+</ul>

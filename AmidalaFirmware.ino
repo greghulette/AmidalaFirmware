@@ -3,7 +3,7 @@
 ///////////////////////////////////////////////
 
 #define FIRMWARE_NAME F("Amidala RC")
-#define VERSION_NUM   F("1.1")
+#define VERSION_NUM   F("1.2")
 #define BUILD_NUM     F("1")
 #define BUILD_DATE    F(__DATE__)
 
@@ -25,7 +25,8 @@
 
 #define CONSOLE_BUFFER_SIZE  64
 
-#define DOME_SENSOR_SERIAL  Serial3
+#define RDH_SERIAL           Serial3
+#define RDH_BAUD_RATE        9600
 
 ////////////////////////////////
 
@@ -111,12 +112,13 @@
 // #define USE_PPM_DEBUG
 //#define USE_MOTOR_DEBUG
 //#define USE_DOME_DEBUG
-// #define USE_SERVO_DEBUG
+//#define USE_SERVO_DEBUG
 // #define USE_VERBOSE_SERVO_DEBUG
 
 ////////////////////////////////
 
 #include "ReelTwo.h"
+#include "ReelTwoAudio.h"
 #include "audio/VMusic.h"
 #if DRIVE_SYSTEM  == DRIVE_SYSTEM_PWM
  #include "drive/TankDrivePWM.h"
@@ -132,13 +134,9 @@
 #elif DOME_DRIVE == DOME_DRIVE_SABER
  #include "drive/DomeDriveSabertooth.h"
 #endif
-#ifdef DOME_SENSOR_SERIAL
- #include "drive/DomeSensorRingSerialListener.h"
-#else
- #include "drive/DomePosition.h"
-#endif
 #include "ServoDispatchDirect.h"
 #include "ServoEasing.h"
+#include "core/MedianSampleBuffer.h"
 // #include "i2c/I2CReceiver.h"
 
 ////////////////////////////////
@@ -187,7 +185,7 @@
 #define CONSOLE_SERIAL      Serial
 #define XBEE_SERIAL         Serial1
 #define VMUSIC_SERIAL       Serial2
-#if !defined(DOME_DRIVE_SERIAL) && !defined(DOME_SENSOR_SERIAL)
+#if !defined(DOME_DRIVE_SERIAL) && !defined(RDH_SERIAL)
 #define AUX_SERIAL          Serial3
 #endif
 
@@ -747,6 +745,124 @@ private:
 
 ////////////////////////////////
 
+class RDHSerial
+{
+public:
+    RDHSerial(Stream &stream) :
+        fStream(stream)
+    {
+    }
+
+    void setRelativePosition(int pos)
+    {
+        fStream.print(":DPD");
+        fStream.println(pos);
+    }
+
+    void setAbsolutePosition(int pos)
+    {
+        fStream.print(":DPA");
+        fStream.println(pos);
+    }
+
+    void sendCommand(const char* cmd)
+    {
+        fStream.println(cmd);
+    }
+
+    bool ready()
+    {
+        return (fPosition != -1);
+    }
+
+    int getAngle()
+    {
+        return fPosition;
+    }
+
+    void process()
+    {
+        // append commands to command buffer
+        while (fStream.available())
+        {
+            int ch = fStream.read();
+            if (ch == '\r' || ch == '\n')
+            {
+                if (fState == 4)
+                {
+                    // Update position
+                    fSamples.append(fValue);
+                    if (fSampleCount < 6)
+                    {
+                        fPosition = fValue;
+                        fSampleCount++;
+                    }
+                    else
+                    {
+                        // Return the filtered angle
+                        fPosition = fSamples.median();
+                    }
+                    // DOME_SENSOR_SERIAL_PRINT(" - ");
+                    // DOME_SENSOR_SERIAL_PRINTLN(fPosition);
+                }
+                fState = 0;
+                if (fStream.available() < 10)
+                    return;
+                continue;
+            }
+            else
+            {
+                // DOME_SENSOR_SERIAL_PRINT((char)ch);
+            }
+            if (fState == -1)
+                continue;
+            switch (fState)
+            {
+                case 0:
+                    fState = (ch == '#') ? fState+1 : -1;
+                    break;
+                case 1:
+                    fState = (ch == 'D') ? fState+1 : -1;
+                    break;
+                case 2:
+                    fState = (ch == 'P') ? fState+1 : -1;
+                    break;
+                case 3:
+                    fState = (ch == '@') ? fState+1 : -1;
+                    fValue = 0;
+                    break;
+                case 4:
+                    if (ch >= '0' && ch <= '9')
+                    {
+                        fValue = fValue * 10 + (ch - '0');
+                    }
+                    else
+                    {
+                        fState = -1;
+                    }
+                    break;
+            }
+            if (fState == -1)
+            {
+                // ERROR: Ignore remaining input
+                DEBUG_PRINTLN("[DOME SENSOR] ERROR READING POSITION");
+                fErrorCount++;
+            }
+        }
+    }
+
+protected:
+    Stream& fStream;
+    int fPosition = -1;
+    int8_t fState = 0;
+    int fValue = 0;
+    int fSampleCount = 0;
+    unsigned fErrorCount = 0;
+    MedianSampleBuffer<short, 5> fSamples;
+};
+
+////////////////////////////////
+
 class AmidalaController : public SetupEvent, public AnimatedEvent
 {
 public:
@@ -755,8 +871,9 @@ public:
         fVMusic(VMUSIC_SERIAL),
         fDriveStick(this),
         fDomeStick(this),
-        fDomeRing(DOME_SENSOR_SERIAL),
-        fAutoDome(fDomeRing),
+    #ifdef RDH_SERIAL
+        fAutoDome(RDH_SERIAL),
+    #endif
     #if DRIVE_SYSTEM == DRIVE_SYSTEM_SABER
         fTankDrive(128, DRIVE_SERIAL, fDriveStick),
     #elif DRIVE_SYSTEM == DRIVE_SYSTEM_PWM
@@ -1467,7 +1584,6 @@ public:
                         CONSOLE_SERIAL.println("Processing Long Button 7");
                     if (event.long_button_up.triangle)
                     {
-                        // set domehome to current position
                         CONSOLE_SERIAL.println("Processing Long Button 6");
                         fDriver->setDomeHome(fDriver->getDomePosition());
                     }
@@ -1583,8 +1699,9 @@ public:
     DomeController fDomeStick;
     XBeePocketRemote* remote[2] = { &fDriveStick, &fDomeStick };
     AmidalaParameters params;
-    DomeSensorRingSerialListener fDomeRing;
-    DomePosition fAutoDome;
+#ifdef RDH_SERIAL
+    RDHSerial fAutoDome;
+#endif
     // I2CReceiver fI2C;
 #if DRIVE_SYSTEM == DRIVE_SYSTEM_SABER
     TankDriveSabertooth fTankDrive;
@@ -1651,17 +1768,17 @@ public:
 
     unsigned getDomeMode()
     {
-        return (unsigned)(fAutoDome.getDomeMode());
+        return 0;
     }
 
     unsigned getDomeHome()
     {
-        return fAutoDome.getDomeHome();
+        return 0;
     }
 
     unsigned getDomePosition()
     {
-        return fAutoDome.getHomeRelativeDomePosition();
+        return fAutoDome.getAngle();
     }
 
     bool getDomeIMU()
@@ -1671,7 +1788,8 @@ public:
 
     void setDomeHome(unsigned pos)
     {
-        fAutoDome.setDomeHomePosition(pos);
+        // TODO
+        // fAutoDome.setDomeHomePosition(pos);
     }
 
     unsigned getVolume()
@@ -1835,27 +1953,7 @@ public:
         fDomeDrive.setScaling(false);
         fDomeDrive.setThrottleAccelerationScale(DEFAULT_DOME_ACCELERATION_SCALE);
         fDomeDrive.setThrottleDecelerationScale(DEFAULT_DOME_DECELERATION_SCALE);
-
-        fAutoDome.setTimeout(DEFAULT_DOME_TIMEOUT);
-        fAutoDome.setDomeHomePosition(DEFAULT_DOME_HOME_POSITION);
-        fAutoDome.setDomeSeekMinDelay(DEFAULT_DOME_HOME_MIN_DELAY);
-        fAutoDome.setDomeSeekMaxDelay(DEFAULT_DOME_HOME_MAX_DELAY);
-        fAutoDome.setDomeSeekLeftDegrees(DEFAULT_DOME_SEEK_LEFT);
-        fAutoDome.setDomeSeekRightDegrees(DEFAULT_DOME_SEEK_RIGHT);
-        fAutoDome.setDomeSeekSpeed(DEFAULT_DOME_SPEED_SEEK);
-
-        fAutoDome.setDomeHomeSpeed(DEFAULT_DOME_SPEED_HOME);
-        fAutoDome.setDomeHomeMinDelay(DEFAULT_DOME_HOME_MIN_DELAY);
-        fAutoDome.setDomeHomeMaxDelay(DEFAULT_DOME_HOME_MAX_DELAY);
-
-        fAutoDome.setDomeTargetSpeed(DEFAULT_DOME_SPEED_TARGET);
-        fAutoDome.setDomeTargetMinDelay(DEFAULT_DOME_TARGET_MIN_DELAY);
-        fAutoDome.setDomeTargetMaxDelay(DEFAULT_DOME_TARGET_MAX_DELAY);
-
-        fAutoDome.setDomeMinSpeed(DEFAULT_DOME_SPEED_MIN);
-        fAutoDome.setDomeFudgeFactor(DEFAULT_DOME_FUDGE);
-
-        fDomeDrive.setDomePosition(&fAutoDome);
+        // fDomeDrive.setDomePosition(&fAutoDome);
     #endif
 
         for (unsigned i = 0; i < params.getServoCount(); i++)
@@ -1878,6 +1976,9 @@ public:
         fConsole.process();
     #ifdef EXPERIMENTAL_JEVOIS_STEERING
         fJevois.process();
+    #endif
+    #ifdef RDH_SERIAL
+        fAutoDome.process();
     #endif
         fVMusic.process();
 
@@ -2110,16 +2211,8 @@ private:
 
     void ToggleRandomDome()
     {
-        if (fAutoDome.getDomeMode() != DomePosition::kRandom)
-        {
-            DEBUG_PRINTLN("AUTO DOME RANDOM");
-            fAutoDome.setDomeMode(DomePosition::kRandom);
-        }
-        else
-        {
-            DEBUG_PRINTLN("AUTO DOME OFF");
-            fAutoDome.setDomeMode(DomePosition::kOff);
-        }
+        DEBUG_PRINTLN("TOGGLE AUTO DOME RANDOM");
+        fAutoDome.sendCommand("#DPAUTO");
     }
 
 friend class AmidalaConsole;
@@ -2782,7 +2875,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
     bool boolarg;
     uint32_t intarg;
     AmidalaController::AmidalaParameters& params = fController->params;
-    DomePosition& autoDome = fController->fAutoDome;
+    RDHSerial& autoDome = fController->fAutoDome;
     DomeDrive* domeDrive = &fController->fDomeDrive;
     if (startswith(cmd, "sb="))
     {
@@ -3063,83 +3156,74 @@ bool AmidalaConsole::processConfig(const char* cmd)
     }
     else if (intparam(cmd, "domepos=", intarg, 0, 360))
     {
-        static int sDomeFudge = params.domefudge;
-        static DomePosition& sAutoDome = autoDome;
         Serial.print("NEWPOS: "); Serial.println(intarg);
-        autoDome.setDomeHomeRelativeTargetPosition(intarg);
-        autoDome.setDomeFudgeFactor(1);
-        autoDome.setTargetReached([]() {
-            Serial.println("Reached Target");
-            sAutoDome.setDomeFudgeFactor(sDomeFudge);
-            sAutoDome.setDomeMode(sAutoDome.getDomeDefaultMode());
-        });
-        autoDome.setDomeMode(DomePosition::kTarget);
+        autoDome.setAbsolutePosition(intarg);
         return true;
     }
     else if (intparam(cmd, "domehome=", params.domehome, 0, 360))
     {
-        autoDome.setDomeHomePosition(params.domehome);
+        // autoDome.setDomeHomePosition(params.domehome);
         return true;
     }
     else if (intparam(cmd, "domemode=", params.domemode, 1, 5))
     {
-        switch (params.domemode)
-        {
-            case 1:
-                autoDome.setDomeDefaultMode(DomePosition::kOff);
-                break;
-            case 2:
-                autoDome.setDomeDefaultMode(DomePosition::kHome);
-                break;
-            case 3:
-                autoDome.setDomeDefaultMode(DomePosition::kRandom);
-                break;
-        }
+        // switch (params.domemode)
+        // {
+        //     case 1:
+        //         autoDome.setDomeDefaultMode(DomePosition::kOff);
+        //         break;
+        //     case 2:
+        //         autoDome.setDomeDefaultMode(DomePosition::kHome);
+        //         break;
+        //     case 3:
+        //         autoDome.setDomeDefaultMode(DomePosition::kRandom);
+        //         break;
+        // }
         return true;
     }
     else if (intparam(cmd, "domehomemin=", params.domehomemin, 1, 255))
     {
-        autoDome.setDomeHomeMinDelay(params.domehomemin);
+        // autoDome.setDomeHomeMinDelay(params.domehomemin);
         return true;
     }
     else if (intparam(cmd, "domehomemax=", params.domehomemax, 1, 255))
     {
-        autoDome.setDomeHomeMaxDelay(params.domehomemax);
+        // autoDome.setDomeHomeMaxDelay(params.domehomemax);
         return true;
     }
     else if (intparam(cmd, "domeseekmin=", params.domehomemin, 1, 255))
     {
-        autoDome.setDomeSeekMinDelay(params.domehomemin);
+        // autoDome.setDomeSeekMinDelay(params.domehomemin);
         return true;
     }
     else if (intparam(cmd, "domeseekmax=", params.domehomemax, 1, 255))
     {
-        autoDome.setDomeSeekMaxDelay(params.domehomemax);
+        // autoDome.setDomeSeekMaxDelay(params.domehomemax);
         return true;
     }
     else if (intparam(cmd, "domeseekr=", params.domeseekr, 1, 180))
     {
-        autoDome.setDomeSeekRightDegrees(params.domeseekr);
+        // autoDome.setDomeSeekRightDegrees(params.domeseekr);
         return true;
     }
     else if (intparam(cmd, "domeseekl=", params.domeseekl, 1, 180))
     {
-        autoDome.setDomeSeekLeftDegrees(params.domeseekl);
+        // autoDome.setDomeSeekLeftDegrees(params.domeseekl);
         return true;
     }
     else if (intparam(cmd, "domefudge=", params.domefudge, 1, 20))
     {
-        autoDome.setDomeFudgeFactor(params.domefudge);
+        // autoDome.setDomeFudgeFactor(params.domefudge);
         return true;
     }
     else if (intparam(cmd, "domespeedhome=", params.domespeedhome, 1, 100))
     {
-        autoDome.setDomeHomeSpeed(params.domespeedhome);
+        // autoDome.setDomeHomeSpeed(params.domespeedhome);
         return true;
     }
     else if (intparam(cmd, "domespeedseek=", params.domespeedseek, 1, 100))
     {
-        autoDome.setDomeSeekSpeed(params.domespeedhome);
+        // autoDome.setDomeSeekSpeed(params.domespeedhome);
         return true;
     }
     else if (strcmp(cmd, "reboot") == 0)
@@ -3373,8 +3457,8 @@ void setup()
     DRIVE_SERIAL.begin(DRIVE_BAUD_RATE);
 #elif defined(DOME_DRIVE_SERIAL)
     DOME_DRIVE_SERIAL.begin(DRIVE_BAUD_RATE);
-#elif defined(DOME_SENSOR_SERIAL)
-    DOME_SENSOR_SERIAL.begin(DOMESENSOR_BAUD_RATE);
+#elif defined(RDH_SERIAL)
+    RDH_SERIAL.begin(RDH_BAUD_RATE);
 #else
     AUX_SERIAL.begin(115200);
 #endif
