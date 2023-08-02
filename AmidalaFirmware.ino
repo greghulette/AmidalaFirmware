@@ -25,7 +25,7 @@
 
 #define CONSOLE_BUFFER_SIZE  64
 
-#define RDH_SERIAL           Serial3
+//#define RDH_SERIAL           Serial3
 #define RDH_BAUD_RATE        9600
 
 ////////////////////////////////
@@ -1778,7 +1778,11 @@ public:
 
     unsigned getDomePosition()
     {
+    #ifdef RDH_SERIAL
         return fAutoDome.getAngle();
+    #else
+        return 0;
+    #endif
     }
 
     bool getDomeIMU()
@@ -2211,8 +2215,10 @@ private:
 
     void ToggleRandomDome()
     {
+    #ifdef RDH_SERIAL
         DEBUG_PRINTLN("TOGGLE AUTO DOME RANDOM");
         fAutoDome.sendCommand("#DPAUTO");
+    #endif
     }
 
 friend class AmidalaConsole;
@@ -2875,7 +2881,9 @@ bool AmidalaConsole::processConfig(const char* cmd)
     bool boolarg;
     uint32_t intarg;
     AmidalaController::AmidalaParameters& params = fController->params;
+#ifdef RDH_SERIAL
     RDHSerial& autoDome = fController->fAutoDome;
+#endif
     DomeDrive* domeDrive = &fController->fDomeDrive;
     if (startswith(cmd, "sb="))
     {
@@ -3156,9 +3164,13 @@ bool AmidalaConsole::processConfig(const char* cmd)
     }
     else if (intparam(cmd, "domepos=", intarg, 0, 360))
     {
+    #ifdef RDH_SERIAL
         Serial.print("NEWPOS: "); Serial.println(intarg);
         autoDome.setAbsolutePosition(intarg);
         return true;
+    #else
+        return false;
+    #endif
     }
     else if (intparam(cmd, "domehome=", params.domehome, 0, 360))
     {
