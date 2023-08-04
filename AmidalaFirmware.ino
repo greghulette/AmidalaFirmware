@@ -472,6 +472,147 @@ class AmidalaController;
 
 ////////////////////////////////
 
+struct ButtonAction
+{
+    enum
+    {
+        kNone = 0,
+        kSound = 1,
+        kServo = 2,
+        kDigitalOut = 3,
+        kI2CCmd = 4,
+        kAuxStr = 5,
+        kI2CStr = 6
+    };
+    uint8_t action;
+    union
+    {
+        struct
+        {
+            uint8_t soundbank;
+            uint8_t sound;
+            uint8_t auxstring;
+        } sound;
+        struct
+        {
+            uint8_t num;
+            uint8_t pos;
+            uint8_t auxstring;
+        } servo;
+        struct
+        {
+            uint8_t num;
+            uint8_t state;
+            uint8_t auxstring;
+        } dout;
+        struct
+        {
+            uint8_t target;
+            uint8_t cmd;
+            uint8_t auxstring;
+        } i2ccmd;
+        struct
+        {
+            uint8_t unused1;
+            uint8_t unused2;
+            uint8_t auxstring;
+        } aux;
+        struct
+        {
+            uint8_t target;
+            uint8_t cmd;
+            uint8_t auxstring;
+        } i2cstr;
+    };
+
+    void printDescription(Print* stream)
+    {
+        switch (action)
+        {
+            case kNone:
+                break;
+            case kSound:
+                stream->print(F("Sound Bank #"));
+                stream->print(sound.soundbank);
+                if (sound.sound != 0)
+                {
+                    stream->print(F(","));
+                    stream->print(sound.sound);
+                }
+                break;
+            case kServo:
+                stream->print(F("Servo #"));
+                stream->print(servo.num);
+                stream->print(F(", On Pos="));
+                stream->print(servo.pos);
+                break;
+            case kDigitalOut:
+                stream->print(F("DOut #"));
+                stream->print(dout.num);
+                stream->print(F(", Type="));
+                switch (dout.state)
+                {
+                    case 0:
+                        stream->print(F("NO"));
+                        break;
+                    case 1:
+                        stream->print(F("NC"));
+                        break;
+                    case 2:
+                        stream->print(F("MON"));
+                        break;
+                }
+                break;
+            case kI2CCmd:
+                stream->print(F("i2c Dest #"));
+                stream->print(i2ccmd.target);
+                stream->print(F(", Cmd="));
+                stream->print(i2ccmd.cmd);
+                break;
+            case kAuxStr:
+                stream->print(F("Aux #"));
+                stream->print(aux.auxstring);
+                break;
+            case kI2CStr:
+                stream->print(F("i2c Aux Output #"));
+                stream->print(i2cstr.cmd);
+                stream->print(F(", Dest "));
+                stream->print(i2cstr.target);
+                break;
+        }
+        if (action != kAuxStr && sound.auxstring != 0)
+        {
+            stream->print(F(", Aux #"));
+            stream->print(sound.auxstring);
+        }
+        stream->println();
+    }
+};
+
+struct GestureAction
+{
+    Gesture gesture;
+    ButtonAction action;
+
+    void printDescription(Print* stream)
+    {
+        char buf[MAX_GESTURE_LENGTH+1];
+        if (!gesture.isEmpty())
+        {
+            stream->print(gesture.getGestureString(buf));
+            stream->print(F(": "));
+            action.printDescription(stream);
+        }
+    }
+};
+
+struct AuxString
+{
+    char str[32];
+};
+
+////////////////////////////////
+
 class AmidalaConsole : public Print
 {
 public:
@@ -486,6 +627,10 @@ public:
     bool processConfig(const char* cmd);
     void processCommand(const char* cmd);
     bool process(char ch, bool config = false);
+
+    void process(ButtonAction& button);
+    void processButton(unsigned num);
+    void processLongButton(unsigned num);
 
     inline void setVMusic(VMusic* vmusic)
     {
@@ -753,16 +898,69 @@ public:
     {
     }
 
+    void setDomeDefaultMode(int mode)
+    {
+        switch (mode)
+        {
+            case 0:
+                fStream.println("#DPHOME0\n#DPAUTO0");
+                break;
+            case 1:
+                fStream.println("#DPHOME1\n#DPAUTO0");
+                break;
+            case 2:
+                fStream.println("#DPHOME0\n#DPAUTO1");
+                break;
+        }
+    }
+
     void setRelativePosition(int pos)
     {
-        fStream.print(":DPD");
-        fStream.println(pos);
+        fStream.print(":DPDM");
+        fStream.print(pos);
+        fStream.println("+");
+    }
+
+    void setRelativePosition(int pos, int speed)
+    {
+        fStream.print(":DPDM");
+        fStream.print(pos);
+        fStream.print(",");
+        fStream.print(speed);
+        fStream.println("+");
     }
 
     void setAbsolutePosition(int pos)
     {
-        fStream.print(":DPA");
+        fStream.print(":DPAM");
+        fStream.print(pos);
+        fStream.println("+");
+    }
+
+    void setAbsolutePosition(int pos, int speed)
+    {
+        fStream.print(":DPAM");
+        fStream.print(pos);
+        fStream.print(",");
+        fStream.print(speed);
+        fStream.println("+");
+    }
+
+    void setDomeHomePosition()
+    {
+        fStream.println("#DPHOMEPOS");
+    }
+
+    void setDomeHomePosition(int pos)
+    {
+        fStream.print("#DPHOMEPOS");
         fStream.println(pos);
+    }
+
+    void toggleRandomDome()
+    {
+        DEBUG_PRINTLN("TOGGLE AUTO DOME RANDOM");
+        fStream.println("#DPAUTO");
     }
 
     void sendCommand(const char* cmd)
@@ -778,6 +976,16 @@ public:
     int getAngle()
     {
         return fPosition;
+    }
+
+    int getMode()
+    {
+        return fMode;
+    }
+
+    int getHome()
+    {
+        return fMode;
     }
 
     void process()
@@ -828,7 +1036,28 @@ public:
                     fState = (ch == 'P') ? fState+1 : -1;
                     break;
                 case 3:
-                    fState = (ch == '@') ? fState+1 : -1;
+                    switch (ch)
+                    {
+                        case '@':
+                            fMode = 0;
+                            fState = fState + 1;
+                            break;
+                        case '!':
+                            fMode = 1;
+                            fState = fState + 1;
+                            break;
+                        case '$':
+                            fMode = 2;
+                            fState = fState + 1;
+                            break;
+                        case '%':
+                            fMode = 3;
+                            fState = fState + 1;
+                            break;
+                        default:
+                            fState = -1;
+                            break;
+                    }
                     fValue = 0;
                     break;
                 case 4:
@@ -856,6 +1085,7 @@ protected:
     int fPosition = -1;
     int8_t fState = 0;
     int fValue = 0;
+    int fMode = 0;
     int fSampleCount = 0;
     unsigned fErrorCount = 0;
     MedianSampleBuffer<short, 5> fSamples;
@@ -898,6 +1128,16 @@ public:
     {
     }
 
+    inline void processButton(unsigned num)
+    {
+        fConsole.processButton(num);
+    }
+
+    inline void processLongButton(unsigned num)
+    {
+        fConsole.processLongButton(num);
+    }
+
     struct AmidalaParameters
     {
         unsigned getRadioChannelCount()
@@ -914,139 +1154,6 @@ public:
             bool random;
         };
 
-        struct ButtonAction
-        {
-            enum
-            {
-                kNone = 0,
-                kSound = 1,
-                kServo = 2,
-                kDigitalOut = 3,
-                kI2CCmd = 4,
-                kAuxStr = 5,
-                kI2CStr = 6
-            };
-            uint8_t action;
-            union
-            {
-                struct
-                {
-                    uint8_t soundbank;
-                    uint8_t sound;
-                    uint8_t auxstring;
-                } sound;
-                struct
-                {
-                    uint8_t num;
-                    uint8_t pos;
-                    uint8_t auxstring;
-                } servo;
-                struct
-                {
-                    uint8_t num;
-                    uint8_t state;
-                    uint8_t auxstring;
-                } dout;
-                struct
-                {
-                    uint8_t target;
-                    uint8_t cmd;
-                    uint8_t auxstring;
-                } i2ccmd;
-                struct
-                {
-                    uint8_t unused1;
-                    uint8_t unused2;
-                    uint8_t auxstring;
-                } aux;
-                struct
-                {
-                    uint8_t target;
-                    uint8_t cmd;
-                    uint8_t auxstring;
-                } i2cstr;
-            };
-
-            void printDescription(Print* stream)
-            {
-                switch (action)
-                {
-                    case kNone:
-                        break;
-                    case kSound:
-                        stream->print(F("Sound Bank #"));
-                        stream->print(sound.soundbank);
-                        if (sound.sound != 0)
-                        {
-                            stream->print(F(","));
-                            stream->print(sound.sound);
-                        }
-                        break;
-                    case kServo:
-                        stream->print(F("Servo #"));
-                        stream->print(servo.num);
-                        stream->print(F(", On Pos="));
-                        stream->print(servo.pos);
-                        break;
-                    case kDigitalOut:
-                        stream->print(F("DOut #"));
-                        stream->print(dout.num);
-                        stream->print(F(", Type="));
-                        switch (dout.state)
-                        {
-                            case 0:
-                                stream->print(F("NO"));
-                                break;
-                            case 1:
-                                stream->print(F("NC"));
-                                break;
-                            case 2:
-                                stream->print(F("MON"));
-                                break;
-                        }
-                        break;
-                    case kI2CCmd:
-                        stream->print(F("i2c Dest #"));
-                        stream->print(i2ccmd.target);
-                        stream->print(F(", Cmd="));
-                        stream->print(i2ccmd.cmd);
-                        break;
-                    case kAuxStr:
-                        stream->print(F("Aux #"));
-                        stream->print(aux.auxstring);
-                        break;
-                    case kI2CStr:
-                        stream->print(F("i2c Aux Output #"));
-                        stream->print(i2cstr.cmd);
-                        stream->print(F(", Dest "));
-                        stream->print(i2cstr.target);
-                        break;
-                }
-                if (action != kAuxStr && sound.auxstring != 0)
-                {
-                    stream->print(F(", Aux #"));
-                    stream->print(sound.auxstring);
-                }
-                stream->println();
-            }
-        };
-
-        struct GestureAction
-        {
-            Gesture gesture;
-            ButtonAction action;
-
-            void printDescription(Print* stream)
-            {
-                char buf[MAX_GESTURE_LENGTH+1];
-                if (!gesture.isEmpty())
-                {
-                    stream->print(gesture.getGestureString(buf));
-                    stream->print(F(": "));
-                    action.printDescription(stream);
-                }
-            }
-        };
 
         struct Channel
         {
@@ -1086,6 +1193,8 @@ public:
         ButtonAction  LB[9];
         GestureAction G[10];
         DigitalOut    D[8];
+        AuxString     A[10];
+        uint8_t   acount;
         uint8_t   gcount;
         uint8_t   sbcount;
         uint8_t   volume;
@@ -1149,6 +1258,11 @@ public:
         constexpr unsigned getGestureCount()
         {
             return sizeof(G)/sizeof(G[0]);
+        }
+
+        constexpr unsigned getAuxStringCount()
+        {
+            return sizeof(A)/sizeof(A[0]);
         }
 
         void init(bool forceReload = false)
@@ -1322,6 +1436,7 @@ public:
             memset(&longpress, '\0', sizeof(longpress));
             fConnecting = true;
             fConnected = false;
+            failsafeNotice = false;
         }
 
         uint32_t addr;
@@ -1483,25 +1598,26 @@ public:
             else
             {
                 if (event.button_up.l3)
-                    CONSOLE_SERIAL.println("Processing Button 5");
+                    fDriver->processButton(5);
                 if (event.button_up.cross)
-                    CONSOLE_SERIAL.println("Processing Button 3");
+                    fDriver->processButton(3);
                 if (event.button_up.circle)
-                    CONSOLE_SERIAL.println("Processing Button 2");
+                    fDriver->processButton(2);
                 if (event.button_up.triangle)
-                    CONSOLE_SERIAL.println("Processing Button 1");
+                    fDriver->processButton(1);
                 if (event.button_up.square)
-                    CONSOLE_SERIAL.println("Processing Button 4");
+                    fDriver->processButton(4);
+
                 if (event.long_button_up.l3)
-                    CONSOLE_SERIAL.println("Processing Long Button 5");
+                    fDriver->processLongButton(5);
                 if (event.long_button_up.cross)
-                    CONSOLE_SERIAL.println("Processing Long Button 3");
+                    fDriver->processLongButton(3);
                 if (event.long_button_up.circle)
-                    CONSOLE_SERIAL.println("Processing Long Button 2");
+                    fDriver->processLongButton(2);
                 if (event.long_button_up.triangle)
-                    CONSOLE_SERIAL.println("Processing Long Button 1");
+                    fDriver->processLongButton(1);
                 if (event.long_button_up.square)
-                    CONSOLE_SERIAL.println("Processing Long Button 4");
+                    fDriver->processLongButton(4);
             }
             fLastTime = currentTime;
         }
@@ -1571,28 +1687,34 @@ public:
                 else
                 {
                     if (event.button_up.cross)
-                        CONSOLE_SERIAL.println("Processing Button 8");
+                        fDriver->processButton(8);
                     if (event.button_up.circle)
-                        CONSOLE_SERIAL.println("Processing Button 7");
+                        fDriver->processButton(7);
                     if (event.button_up.triangle)
-                        CONSOLE_SERIAL.println("Processing Button 6");
+                        fDriver->processButton(6);
+                    if (event.button_up.square)
+                        fDriver->processButton(9);
+
                     if (event.long_button_up.cross)
-                        CONSOLE_SERIAL.println("Processing Button 9");
-                    if (event.long_button_up.square)
-                        CONSOLE_SERIAL.println("Processing Long Button 8");
+                        fDriver->processLongButton(8);
                     if (event.long_button_up.circle)
-                        CONSOLE_SERIAL.println("Processing Long Button 7");
+                        fDriver->processLongButton(7);
                     if (event.long_button_up.triangle)
-                    {
-                        CONSOLE_SERIAL.println("Processing Long Button 6");
-                        fDriver->setDomeHome(fDriver->getDomePosition());
-                    }
+                        fDriver->processLongButton(6);
                     if (event.long_button_up.square)
-                    {
-                        // toggle random dome mode
-                        CONSOLE_SERIAL.println("Processing Long Button 9");
-                        fDriver->ToggleRandomDome();
-                    }
+                        fDriver->processLongButton(9);
+                    
+                    // if (event.long_button_up.triangle)
+                    // {
+                    //     CONSOLE_SERIAL.println("Processing Long Button 6");
+                    //     fDriver->setDomeHomePosition();
+                    // }
+                    // if (event.long_button_up.square)
+                    // {
+                    //     // toggle random dome mode
+                    //     CONSOLE_SERIAL.println("Processing Long Button 9");
+                    //     fDriver->toggleRandomDome();
+                    // }
                 }
                 return;
             }
@@ -1768,12 +1890,20 @@ public:
 
     unsigned getDomeMode()
     {
+    #ifdef RDH_SERIAL
+        return fAutoDome.getMode();
+    #else
         return 0;
+    #endif
     }
 
     unsigned getDomeHome()
     {
+    #ifdef RDH_SERIAL
+        return fAutoDome.getHome();
+    #else
         return 0;
+    #endif
     }
 
     unsigned getDomePosition()
@@ -1792,8 +1922,9 @@ public:
 
     void setDomeHome(unsigned pos)
     {
-        // TODO
-        // fAutoDome.setDomeHomePosition(pos);
+    #ifdef RDH_SERIAL
+        fAutoDome.setDomeHomePosition(pos);
+    #endif
     }
 
     unsigned getVolume()
@@ -1876,6 +2007,17 @@ public:
         return fVMusic.parseTextFile(parser, "config.txt");
     }
 
+    void sendAuxString(const char* str)
+    {
+        char ch;
+        while ((ch = *str++) != '\0')
+        {
+            if (ch == params.auxdelim)
+                ch = params.auxeol;
+            AUX_SERIAL.print(ch);
+        }
+    }
+
     virtual void setup() override
     {
         fConsole.println(F("Loading config from EEPROM"));
@@ -1883,7 +2025,11 @@ public:
 
         fConsole.init(this);
         fConsole.println("Waiting for VMusic");
-        if (!fVMusic.init())
+        if (fVMusic.init())
+        {
+            fConsole.setVMusic(&fVMusic);
+        }
+        else
         {
             fConsole.println("VMusic unavailable");
         }
@@ -1892,7 +2038,7 @@ public:
     #endif
 
         fConsole.println(F("Reading Config File"));
-        fConsole.setMinimal(readConfig());
+        fConsole.setMinimal(!readConfig());
 
         fConsole.println(F("Activating Servos"));
         fConsole.println(F("Activating Digital Outputs"));
@@ -1901,6 +2047,11 @@ public:
         fConsole.println(F("No i2c devices configured"));
         if (params.autocorrect)
             fConsole.println(F("Auto Correct Gestures Enabled"));
+
+    #ifdef AUX_SERIAL
+        AUX_SERIAL.begin(params.auxbaud);
+        sendAuxString(params.auxinit);
+    #endif
 
         remote[0]->addr = params.xbr;
         remote[1]->addr = params.xbl;
@@ -2147,6 +2298,7 @@ public:
             for (unsigned i = 0; i < sizeof(remote)/sizeof(remote[0]); i++)
             {
                 auto r = remote[i];
+                // Serial.print("R"); Serial.print(i); Serial.print(" F"); Serial.print(r->failsafe()); Serial.print(" N"); Serial.print(r->failsafeNotice);
                 if (r->failsafe() != r->failsafeNotice)
                 {
                     if (stickActive)
@@ -2161,6 +2313,7 @@ public:
                     r->failsafeNotice = r->failsafe();
                 }
             }
+            Serial.print('\r');
         }
     }
 
@@ -2213,11 +2366,17 @@ private:
         fDriveThrottle = throttle;
     }
 
-    void ToggleRandomDome()
+    void setDomeHomePosition()
     {
     #ifdef RDH_SERIAL
-        DEBUG_PRINTLN("TOGGLE AUTO DOME RANDOM");
-        fAutoDome.sendCommand("#DPAUTO");
+        fAutoDome.setDomeHomePosition();
+    #endif
+    }
+
+    void toggleRandomDome()
+    {
+    #ifdef RDH_SERIAL
+        fAutoDome.toggleRandomDome();
     #endif
     }
 
@@ -2276,17 +2435,20 @@ void AmidalaConsole::playSound(int sndbank, int snd)
                     snd = -1;
                 }
             }
-            if (snd >= 1 && snd <= sb->numfiles)
+            Serial.println(snd);
+            if (snd <= sb->numfiles)
             {
-                char fname[11];
+                char fname[16];
                 snprintf(fname, sizeof(fname), "%s-%d.MP3", sb->dir, snd+1);
+                Serial.print("PLAY: ");
+                Serial.println(fname);
                 fVMusic->play(fname, sb->dir);
             }
         }
     }
     else
     {
-        println(F("Invalid"));
+        println(F("Invalid2"));
     }
 }
 
@@ -2346,6 +2508,54 @@ void AmidalaConsole::printHelp()
     println(F("c - Show config in EEPROM"));
     println(F("m - Servo Monitor Toggle on/off"));
     println();
+}
+
+void AmidalaConsole::process(ButtonAction& button)
+{
+    AmidalaController::AmidalaParameters& params = fController->params;
+    switch (button.action)
+    {
+        case button.kSound:
+            Serial.print("PLAY SOUND BANK "); Serial.print(button.sound.soundbank);
+            Serial.print(" # "); Serial.println(button.sound.sound);
+            if (button.sound.sound != 0)
+            {
+                playSound(button.sound.soundbank, button.sound.sound);
+            }
+            else
+            {
+                playSound(button.sound.soundbank);
+            }
+            break;
+        case button.kAuxStr:
+            if (button.aux.auxstring < params.getAuxStringCount())
+            {
+                fController->sendAuxString(params.A[button.aux.auxstring].str);
+            }
+            break;
+    }
+}
+
+void AmidalaConsole::processButton(unsigned num)
+{
+    print("Processing Button "); println(num);
+    AmidalaController::AmidalaParameters& params = fController->params;
+
+    if (num < params.getButtonCount())
+    {
+        process(params.B[num-1]);
+    }
+}
+
+void AmidalaConsole::processLongButton(unsigned num)
+{
+    print("Processing Long Button "); println(num);
+    AmidalaController::AmidalaParameters& params = fController->params;
+
+    if (num < params.getButtonCount())
+    {
+        process(params.LB[num-1]);
+    }
 }
 
 void AmidalaConsole::showLoadEEPROM(bool load)
@@ -2521,9 +2731,10 @@ void AmidalaConsole::showCurrentConfiguration()
         print(F("Aux EOL: ")); println(params.auxeol);
         print(F("Aux Init: ")); println();
         println(F("Aux Serial String Commands:"));
-        println("1: TWOLEGS");
-        println("2: THREELEGS");
-        println();
+        for (unsigned i = 0; i < params.getAuxStringCount(); i++)
+        {
+            println(params.A[i].str);
+        }
         println();
         print(F("domemode: ")); println(params.domemode);
         print(F("domehome: ")); println(params.domehome);
@@ -2786,6 +2997,39 @@ bool charparam(const char* cmd, const char* match, const char* oneof, char &valu
     return false;
 }
 
+bool sintparam(const char* cmd, const char* match, int32_t &value)
+{
+    if (startswith(cmd, match))
+    {
+        int32_t val = strtol(cmd, &cmd);
+        if (*cmd == '\0')
+        {
+            value = val;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool sintparam2(const char* cmd, const char* match, int32_t &value1, int32_t &value2)
+{
+    if (startswith(cmd, match))
+    {
+        int32_t val = strtol(cmd, &cmd);
+        if (*cmd == ',')
+        {
+            value1 = val;
+            val = strtol(cmd+1, &cmd);
+            if (*cmd == '\0')
+            {
+                value2 = val;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool intparam(const char* cmd, const char* match, uint32_t &value, uint32_t minval, uint32_t maxval)
 {
     if (startswith(cmd, match))
@@ -2879,7 +3123,8 @@ bool numberparams(const char* cmd, uint8_t &argcount, uint8_t* args, uint8_t max
 bool AmidalaConsole::processConfig(const char* cmd)
 {
     bool boolarg;
-    uint32_t intarg;
+    int32_t sintarg;
+    int32_t sintarg2;
     AmidalaController::AmidalaParameters& params = fController->params;
 #ifdef RDH_SERIAL
     RDHSerial& autoDome = fController->fAutoDome;
@@ -2959,7 +3204,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
         uint8_t argcount;
         uint8_t args[5];
         memset(args, '\0', sizeof(args));
-        AmidalaController::AmidalaParameters::ButtonAction* b = params.B;
+        ButtonAction* b = params.B;
         if (numberparams(cmd, argcount, args, sizeof(args)) &&
             argcount >= 3 && args[0] >= 1 && args[0] <= params.getButtonCount())
         {
@@ -3007,7 +3252,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
         uint8_t argcount;
         uint8_t args[5];
         memset(args, '\0', sizeof(args));
-        AmidalaController::AmidalaParameters::ButtonAction* b = params.B;
+        ButtonAction* b = params.B;
         if (numberparams(cmd, argcount, args, sizeof(args)) &&
             argcount >= 3 && args[0] >= 1 && args[0] <= params.getButtonCount())
         {
@@ -3050,6 +3295,14 @@ bool AmidalaConsole::processConfig(const char* cmd)
         }
         return false;
     }
+    else if (startswith(cmd, "a="))
+    {
+        AuxString* a = &params.A[min(params.acount, params.getAuxStringCount()-1)];
+        strncpy(a->str, cmd, sizeof(a->str)-1);
+        a->str[sizeof(a->str)-1] = '\0';
+        if (params.acount < params.getAuxStringCount())
+            params.acount++;
+    }
     else if (startswith(cmd, "g="))
     {
         char gesture[MAX_GESTURE_LENGTH+1];
@@ -3066,8 +3319,8 @@ bool AmidalaConsole::processConfig(const char* cmd)
         }
         if (*cmd == ',')
             cmd++;
-        AmidalaController::AmidalaParameters::GestureAction* g = &params.G[min(params.gcount, params.getGestureCount()-1)];
-        AmidalaController::AmidalaParameters::ButtonAction* b = &g->action;
+        GestureAction* g = &params.G[min(params.gcount, params.getGestureCount()-1)];
+        ButtonAction* b = &g->action;
         g->gesture.setGesture(gesture);
         if (!g->gesture.isEmpty())
         {
@@ -3162,11 +3415,41 @@ bool AmidalaConsole::processConfig(const char* cmd)
         domeDrive->setMaxSpeed(params.domespeed);
         return true;
     }
-    else if (intparam(cmd, "domepos=", intarg, 0, 360))
+    else if (sintparam(cmd, "domepos=", sintarg))
     {
     #ifdef RDH_SERIAL
-        Serial.print("NEWPOS: "); Serial.println(intarg);
-        autoDome.setAbsolutePosition(intarg);
+        Serial.print("NEWPOS: "); Serial.println(sintarg);
+        autoDome.setAbsolutePosition(sintarg);
+        return true;
+    #else
+        return false;
+    #endif
+    }
+    else if (sintparam2(cmd, "domepos=", sintarg, sintarg2))
+    {
+    #ifdef RDH_SERIAL
+        Serial.print("NEWPOS: "); Serial.println(sintarg);
+        autoDome.setAbsolutePosition(sintarg, sintarg2);
+        return true;
+    #else
+        return false;
+    #endif
+    }
+    else if (sintparam(cmd, "domerpos=", sintarg))
+    {
+    #ifdef RDH_SERIAL
+        Serial.print("NEWPOS: "); Serial.println(sintarg);
+        autoDome.setRelativePosition(sintarg);
+        return true;
+    #else
+        return false;
+    #endif
+    }
+    else if (sintparam2(cmd, "domerpos=", sintarg, sintarg2))
+    {
+    #ifdef RDH_SERIAL
+        Serial.print("NEWPOS: "); Serial.println(sintarg);
+        autoDome.setRelativePosition(sintarg, sintarg2);
         return true;
     #else
         return false;
@@ -3174,24 +3457,21 @@ bool AmidalaConsole::processConfig(const char* cmd)
     }
     else if (intparam(cmd, "domehome=", params.domehome, 0, 360))
     {
-        // autoDome.setDomeHomePosition(params.domehome);
+    #ifdef RDH_SERIAL
+        autoDome.setDomeHomePosition(params.domehome);
         return true;
+    #else
+        return false;
+    #endif
     }
     else if (intparam(cmd, "domemode=", params.domemode, 1, 5))
     {
-        // switch (params.domemode)
-        // {
-        //     case 1:
-        //         autoDome.setDomeDefaultMode(DomePosition::kOff);
-        //         break;
-        //     case 2:
-        //         autoDome.setDomeDefaultMode(DomePosition::kHome);
-        //         break;
-        //     case 3:
-        //         autoDome.setDomeDefaultMode(DomePosition::kRandom);
-        //         break;
-        // }
+    #ifdef RDH_SERIAL
+        autoDome.setDomeDefaultMode(params.domemode);
         return true;
+    #else
+        return false;
+    #endif
     }
     else if (intparam(cmd, "domehomemin=", params.domehomemin, 1, 255))
     {
