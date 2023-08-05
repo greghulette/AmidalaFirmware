@@ -1436,7 +1436,7 @@ public:
             memset(&longpress, '\0', sizeof(longpress));
             fConnecting = true;
             fConnected = false;
-            failsafeNotice = false;
+            failsafeNotice = true;
         }
 
         uint32_t addr;
@@ -2016,6 +2016,7 @@ public:
                 ch = params.auxeol;
             AUX_SERIAL.print(ch);
         }
+        AUX_SERIAL.print(params.auxeol);
     }
 
     virtual void setup() override
@@ -2047,6 +2048,12 @@ public:
         fConsole.println(F("No i2c devices configured"));
         if (params.autocorrect)
             fConsole.println(F("Auto Correct Gestures Enabled"));
+
+        fVMusic.setVolume(params.volume);
+        if (params.startup)
+        {
+            fVMusic.play("startup.mp3");
+        }
 
     #ifdef AUX_SERIAL
         AUX_SERIAL.begin(params.auxbaud);
@@ -2257,9 +2264,11 @@ public:
             }
             else if (fXBee.getResponse().isError())
             {
+            #ifdef USE_POCKET_REMOTE_DEBUG
                 DEBUG_PRINTLN();
                 DEBUG_PRINT("Error reading packet.  Error code: ");  
                 DEBUG_PRINTLN(fXBee.getResponse().getErrorCode());
+            #endif
                 for (unsigned i = 0; i < sizeof(remote)/sizeof(remote[0]); i++)
                     remote[i]->lastPacket = 0;
             }
