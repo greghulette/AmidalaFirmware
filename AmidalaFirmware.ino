@@ -3,7 +3,7 @@
 ///////////////////////////////////////////////
 
 #define FIRMWARE_NAME F("Amidala RC")
-#define VERSION_NUM   F("1.2")
+#define VERSION_NUM   F("1.3")
 #define BUILD_NUM     F("1")
 #define BUILD_DATE    F(__DATE__)
 
@@ -214,62 +214,6 @@ ServoDispatchDirect<SizeOfArray(servoSettings)> servoDispatch(servoSettings);
 
 ////////////////////////////////
 
-#if 0
-template<const char* DICTIONARY>class Gesture
-{
-public:
-    Gesture(const char* gestureStr = nullptr)
-    {
-        setGesture(gestureStr);
-    }
-
-    bool isEmpty()
-    {
-        return fGesture == 0;
-    }
-
-    uint8_t getGestureType(char ch)
-    {
-        const char* idx = strchr(DICTIONARY, ch);
-        return (idx != nullptr) ? idx - DICTIONARY + 1 : 0;
-    }
-
-    char* getGestureString(char* str)
-    {
-        char* s = str;
-        unsigned cnt = 0;
-        uint32_t quotient = fGesture;
-        while (quotient != 0 && cnt < MAX_GESTURE_LENGTH)
-        {
-            uint32_t remainder = quotient % DICTIONARY_LEN;
-            *s++ = (remainder != 0) ? DICTIONARY[remainder] : 0;
-            *s = '\0';
-            quotient = quotient / 14;
-        }
-        return str;
-    }
-
-    void setGesture(const char* str)
-    {
-        fGesture = 0;
-        const char* strend = str + strlen(str);
-        while (str != strend)
-        {
-            // Base 16
-            fGesture = fGesture * 14 + getGestureType(*--strend);
-        }
-    }
-
-private:
-    uint32_t fGesture;
-    static int constexpr DICTIONARY_LEN = length(DICTIONARY);
-
-    static int constexpr length(const char* str)
-    {
-        return *str ? 1 + length(str + 1) : 0;
-    }
-};
-#else
 class Gesture
 {
 public:
@@ -310,6 +254,26 @@ public:
         }
     }
 
+    bool matches(const char* str)
+    {
+        if (fGesture == 0 && *str == '\0')
+            return true;
+        if (fGesture == 0)
+            return false;
+        const char* s = str;
+        unsigned cnt = 0;
+        uint32_t quotient = fGesture;
+        while (quotient != 0 && cnt < MAX_GESTURE_LENGTH)
+        {
+            uint8_t val[] = { '\0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D' };
+            uint32_t remainder = quotient % 14;
+            if (*s++ != val[remainder])
+                return false;
+            quotient = quotient / 14;
+        }
+        return (*s == '\0');
+    }
+
     char* getGestureString(char* str)
     {
         char* s = str;
@@ -340,7 +304,6 @@ public:
 private:
     uint32_t fGesture;
 };
-#endif
 
 ////////////////////////////////
 
@@ -580,10 +543,10 @@ struct ButtonAction
                 stream->print(i2cstr.target);
                 break;
         }
-        if (action != kAuxStr && sound.auxstring != 0)
+        if (action != kAuxStr && aux.auxstring != 0)
         {
             stream->print(F(", Aux #"));
-            stream->print(sound.auxstring);
+            stream->print(aux.auxstring);
         }
         stream->println();
     }
@@ -628,6 +591,7 @@ public:
     void processCommand(const char* cmd);
     bool process(char ch, bool config = false);
 
+    void processGesture(const char* gesture);
     void process(ButtonAction& button);
     void processButton(unsigned num);
     void processLongButton(unsigned num);
@@ -677,6 +641,7 @@ public:
     }
 
     void randomToggle();
+    void setVolumeNoResponse(uint8_t volume);
     void playSound(int sndbank, int snd = 0);
     void setServo();
     void setDigitalOut();
@@ -1128,6 +1093,11 @@ public:
     {
     }
 
+    inline void processGesture(const char* gesture)
+    {
+        fConsole.processGesture(gesture);
+    }
+
     inline void processButton(unsigned num)
     {
         fConsole.processButton(num);
@@ -1136,6 +1106,11 @@ public:
     inline void processLongButton(unsigned num)
     {
         fConsole.processLongButton(num);
+    }
+
+    inline void setVolumeNoResponse(unsigned volume)
+    {
+        fConsole.setVolumeNoResponse(volume);
     }
 
     struct AmidalaParameters
@@ -1479,8 +1454,8 @@ public:
             state.analog.stick.ly = map(y, 0, 1024, 127, -128);
             state.analog.stick.rx = state.analog.stick.lx;
             state.analog.stick.ry = state.analog.stick.ly;
-            state.analog.button.l1 = map(w2, 0, 1024, 255, 0);
-            state.analog.button.l2 = map(w1, 0, 1024, 255, 0);
+            state.analog.button.l1 = map(w1, 0, 1024, 255, 0);
+            state.analog.button.l2 = map(w2, 0, 1024, 255, 0);
             // Serial.print(state.analog.button.l1); Serial.print(" - "); Serial.println(state.analog.button.l2);
             state.analog.button.r1 = state.analog.button.l1;
             state.analog.button.r2 = state.analog.button.l2;
@@ -1590,9 +1565,9 @@ public:
                 fDriver->emergencyStop();
                 disconnect();
             }
-            else if (lagTime > 300)
+            else if (lagTime > 500)
             {
-                DEBUG_PRINTLN("It has been 300ms. Shutdown motors");
+                DEBUG_PRINTLN("It has been 500ms. Shutdown motors");
                 fDriver->emergencyStop();
             }
             else
@@ -1656,9 +1631,9 @@ public:
                 fDriver->domeEmergencyStop();
                 disconnect();
             }
-            else if (lagTime > 300)
+            else if (lagTime > 500)
             {
-                DEBUG_PRINTLN("It has been 300ms. Shutdown motors");
+                DEBUG_PRINTLN("It has been 500ms. Shutdown motors");
                 fDriver->domeEmergencyStop();
             }
             else
@@ -1670,10 +1645,18 @@ public:
 
         void process()
         {
+            if (event.analog_changed.button.l1)
+            {
+                /* Volume */
+                fDriver->setVolumeNoResponse(map(state.analog.button.l1, 0, 255, 0, 100));
+            }
             if (event.analog_changed.button.l2)
             {
+                /* Throttle */
+                // Serial.println(state.analog.button.l2);//map(state.button.l1, 0, 255, 100, 0));
                 fDriver->setDomeThrottle(float(state.analog.button.l2)/255.0);
             }
+
             if (!fGestureCollect)
             {
                 if (event.button_up.l3)
@@ -1733,9 +1716,10 @@ public:
                     unsigned glen = strlen(fGestureBuffer);
                     if (glen > 0 && fGestureBuffer[glen-1] == '5')
                         fGestureBuffer[glen-1] = 0;
-                    DEBUG_PRINT("GESTURE: "); DEBUG_PRINTLN(fGestureBuffer);
                     fDriver->enableDomeController();
                     fGestureCollect = false;
+                    fDriver->processGesture(fGestureBuffer);
+                    return;
                 }
 
                 if (event.button_up.triangle)
@@ -2014,9 +1998,10 @@ public:
         {
             if (ch == params.auxdelim)
                 ch = params.auxeol;
-            AUX_SERIAL.print(ch);
+            AUX_SERIAL.write(ch);
         }
-        AUX_SERIAL.print(params.auxeol);
+        ch = params.auxeol;
+        AUX_SERIAL.write(ch);
     }
 
     virtual void setup() override
@@ -2322,7 +2307,6 @@ public:
                     r->failsafeNotice = r->failsafe();
                 }
             }
-            Serial.print('\r');
         }
     }
 
@@ -2418,11 +2402,22 @@ void AmidalaConsole::randomToggle()
     println((params.rndon) ? F("On") : F("Off"));
 }
 
+void AmidalaConsole::setVolumeNoResponse(uint8_t volume)
+{
+    if (fVMusic != nullptr)
+        fVMusic->setVolumeNoResponse(volume);
+}
+
 void AmidalaConsole::playSound(int sndbank, int snd)
 {
     AmidalaController::AmidalaParameters& params = fController->params;
     if (fVMusic != nullptr)
     {
+        if (fVMusic->isPlaying())
+        {
+            println(F("Busy"));
+            return;
+        }
         AmidalaController::AmidalaParameters::SoundBank* sb = params.SB;
         if (sndbank >= 1 && sndbank <= params.sbcount)
         {
@@ -2457,7 +2452,7 @@ void AmidalaConsole::playSound(int sndbank, int snd)
     }
     else
     {
-        println(F("Invalid2"));
+        println(F("Invalid"));
     }
 }
 
@@ -2536,12 +2531,24 @@ void AmidalaConsole::process(ButtonAction& button)
                 playSound(button.sound.soundbank);
             }
             break;
-        case button.kAuxStr:
-            if (button.aux.auxstring < params.getAuxStringCount())
-            {
-                fController->sendAuxString(params.A[button.aux.auxstring].str);
-            }
-            break;
+    }
+    if (button.aux.auxstring != 0 && button.aux.auxstring <= params.getAuxStringCount())
+    {
+        DEBUG_PRINT("AUX #"); DEBUG_PRINTLN(params.A[button.aux.auxstring-1].str);
+        fController->sendAuxString(params.A[button.aux.auxstring-1].str);
+    }
+}
+
+void AmidalaConsole::processGesture(const char* gesture)
+{
+    AmidalaController::AmidalaParameters& params = fController->params;
+    print("GESTURE: "); println(gesture);
+    for (unsigned i = 0; i < params.getGestureCount(); i++)
+    {
+        if (params.G[i].gesture.matches(gesture))
+        {
+            process(params.G[i].action);
+        }
     }
 }
 
@@ -3220,38 +3227,49 @@ bool AmidalaConsole::processConfig(const char* cmd)
             b += args[0]-1;
             memset(b, '\0', sizeof(*b));
             b->action = args[1];
-            switch (b->action = args[1])
+            b->sound.auxstring = 0;
+            switch (args[1])
             {
-                case 1:
+                case ButtonAction::kSound:
                     b->sound.soundbank = max(1, min(args[2], params.sbcount));
                     b->sound.sound = (argcount >= 4) ? args[3] : 0;
                     b->sound.sound = min(b->sound.sound, params.SB[b->sound.soundbank].numfiles);
+                    b->action = args[1];
                     break;
-                case 2:
+                case ButtonAction::kServo:
                     b->servo.num = max(1, min(args[2], 8));
                     b->servo.pos = (argcount >= 4) ? args[3] : 0;
                     b->servo.pos = min(max(b->servo.pos, 180), 90);
+                    b->action = args[1];
                     break;
-                case 3:
+                case ButtonAction::kDigitalOut:
                     b->dout.num = max(1, min(args[2], 8));
                     b->dout.state = (argcount >= 4) ? args[3] : 0;
                     b->dout.state = min(2, b->dout.state);
+                    b->action = args[1];
                     break;
-                case 4:
+                case ButtonAction::kI2CCmd:
                     b->i2ccmd.target = min(args[2], 100);
                     b->i2ccmd.cmd = (argcount >= 4) ? args[3] : 0;
+                    b->action = args[1];
                     break;
-                case 5:
+                case ButtonAction::kAuxStr:
+                    b->aux.auxstring = min(args[2], 10);
+                    Serial.print("BUTTON AUX #"); Serial.println(b->aux.auxstring);
+                    if (b->action == 0)
+                        b->action = args[1];
                     break;
-                case 6:
+                case ButtonAction::kI2CStr:
                     b->i2cstr.target = min(args[2], 100);
                     b->i2cstr.cmd = (argcount >= 4) ? args[3] : 0;
+                    b->action = args[1];
                     break;
                 default:
                     b->action = 0;
                     break;
             }
-            b->sound.auxstring = (argcount >= 5) ? args[4] : 0;
+            if (b->action != ButtonAction::kAuxStr && argcount >= 4)
+                b->sound.auxstring = (argcount >= 5) ? args[4] : 0;
             return true;
         }
         return false;
@@ -3261,45 +3279,55 @@ bool AmidalaConsole::processConfig(const char* cmd)
         uint8_t argcount;
         uint8_t args[5];
         memset(args, '\0', sizeof(args));
-        ButtonAction* b = params.B;
+        ButtonAction* b = params.LB;
         if (numberparams(cmd, argcount, args, sizeof(args)) &&
             argcount >= 3 && args[0] >= 1 && args[0] <= params.getButtonCount())
         {
             b += args[0]-1;
             memset(b, '\0', sizeof(*b));
             b->action = args[1];
-            switch (b->action = args[1])
+            b->sound.auxstring = 0;
+            switch (args[1])
             {
-                case 1:
+                case ButtonAction::kSound:
                     b->sound.soundbank = max(1, min(args[2], params.sbcount));
                     b->sound.sound = (argcount >= 4) ? args[3] : 0;
                     b->sound.sound = min(b->sound.sound, params.SB[b->sound.soundbank].numfiles);
+                    b->action = args[1];
                     break;
-                case 2:
+                case ButtonAction::kServo:
                     b->servo.num = max(1, min(args[2], 8));
                     b->servo.pos = (argcount >= 4) ? args[3] : 0;
                     b->servo.pos = min(max(b->servo.pos, 180), 90);
+                    b->action = args[1];
                     break;
-                case 3:
+                case ButtonAction::kDigitalOut:
                     b->dout.num = max(1, min(args[2], 8));
                     b->dout.state = (argcount >= 4) ? args[3] : 0;
                     b->dout.state = min(2, b->dout.state);
+                    b->action = args[1];
                     break;
-                case 4:
+                case ButtonAction::kI2CCmd:
                     b->i2ccmd.target = min(args[2], 100);
                     b->i2ccmd.cmd = (argcount >= 4) ? args[3] : 0;
+                    b->action = args[1];
                     break;
-                case 5:
+                case ButtonAction::kAuxStr:
+                    b->aux.auxstring = min(args[2], 10);
+                    if (b->action == 0)
+                        b->action = args[1];
                     break;
-                case 6:
+                case ButtonAction::kI2CStr:
                     b->i2cstr.target = min(args[2], 100);
                     b->i2cstr.cmd = (argcount >= 4) ? args[3] : 0;
+                    b->action = args[1];
                     break;
                 default:
                     b->action = 0;
                     break;
             }
-            b->sound.auxstring = (argcount >= 5) ? args[4] : 0;
+            if (b->action != ButtonAction::kAuxStr && argcount >= 4)
+                b->sound.auxstring = args[3];
             return true;
         }
         return false;
@@ -3340,30 +3368,33 @@ bool AmidalaConsole::processConfig(const char* cmd)
             {
                 memset(b, '\0', sizeof(*b));
                 b->action = args[0];
+                b->sound.auxstring = 0;
                 switch (b->action = args[0])
                 {
-                    case 1:
+                    case ButtonAction::kSound:
                         b->sound.soundbank = max(1, min(args[1], params.sbcount));
                         b->sound.sound = (argcount >= 3) ? args[2] : 0;
                         b->sound.sound = min(b->sound.sound, params.SB[b->sound.soundbank].numfiles);
                         break;
-                    case 2:
+                    case ButtonAction::kServo:
                         b->servo.num = max(1, min(args[1], 8));
                         b->servo.pos = (argcount >= 3) ? args[2] : 0;
                         b->servo.pos = min(max(b->servo.pos, 180), 90);
                         break;
-                    case 3:
+                    case ButtonAction::kDigitalOut:
                         b->dout.num = max(1, min(args[1], 8));
                         b->dout.state = (argcount >= 3) ? args[2] : 0;
                         b->dout.state = min(2, b->dout.state);
                         break;
-                    case 4:
+                    case ButtonAction::kI2CCmd:
                         b->i2ccmd.target = min(args[1], 100);
                         b->i2ccmd.cmd = (argcount >= 3) ? args[2] : 0;
                         break;
-                    case 5:
+                    case ButtonAction::kAuxStr:
+                        b->aux.auxstring = min(args[1], 10);
+                        Serial.print("GESTURE AUX #"); Serial.println(b->aux.auxstring);
                         break;
-                    case 6:
+                    case ButtonAction::kI2CStr:
                         b->i2cstr.target = min(args[1], 100);
                         b->i2cstr.cmd = (argcount >= 3) ? args[2] : 0;
                         break;
@@ -3371,7 +3402,8 @@ bool AmidalaConsole::processConfig(const char* cmd)
                         b->action = 0;
                         break;
                 }
-                b->sound.auxstring = (argcount >= 4) ? args[3] : 0;
+                if (b->action != ButtonAction::kAuxStr && argcount >= 3)
+                    b->sound.auxstring = args[2];
                 if (params.gcount < params.getGestureCount())
                     params.gcount++;
                 return true;
