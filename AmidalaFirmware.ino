@@ -1173,11 +1173,8 @@ public:
         ButtonAction  LB[9];
         GestureAction G[10];
         DigitalOut    D[8];
-<<<<<<< HEAD
-        AuxString     A[40];
-=======
+
         AuxString     A[MAX_AUX_STRINGS];
->>>>>>> 5e844ca788d757bdcaf27ed959234e3cff0b79bf
         uint8_t   acount;
         uint8_t   gcount;
         uint8_t   sbcount;
