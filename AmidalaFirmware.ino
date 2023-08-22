@@ -105,6 +105,10 @@
 #define LONG_PRESS_TIME      3000
 #endif
 
+#ifndef MAX_AUX_STRINGS
+#define MAX_AUX_STRINGS      40
+#endif
+
 ////////////////////////////////
 
 #define USE_DEBUG
@@ -1169,7 +1173,11 @@ public:
         ButtonAction  LB[9];
         GestureAction G[10];
         DigitalOut    D[8];
+<<<<<<< HEAD
         AuxString     A[40];
+=======
+        AuxString     A[MAX_AUX_STRINGS];
+>>>>>>> 5e844ca788d757bdcaf27ed959234e3cff0b79bf
         uint8_t   acount;
         uint8_t   gcount;
         uint8_t   sbcount;
@@ -3255,7 +3263,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
                     b->action = args[1];
                     break;
                 case ButtonAction::kAuxStr:
-                    b->aux.auxstring = min(args[2], 10);
+                    b->aux.auxstring = min(args[2], MAX_AUX_STRINGS);
                     Serial.print("BUTTON AUX #"); Serial.println(b->aux.auxstring);
                     if (b->action == 0)
                         b->action = args[1];
@@ -3314,7 +3322,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
                     b->action = args[1];
                     break;
                 case ButtonAction::kAuxStr:
-                    b->aux.auxstring = min(args[2], 10);
+                    b->aux.auxstring = min(args[2], MAX_AUX_STRINGS);
                     if (b->action == 0)
                         b->action = args[1];
                     break;
@@ -3392,7 +3400,7 @@ bool AmidalaConsole::processConfig(const char* cmd)
                         b->i2ccmd.cmd = (argcount >= 3) ? args[2] : 0;
                         break;
                     case ButtonAction::kAuxStr:
-                        b->aux.auxstring = min(args[1], 10);
+                        b->aux.auxstring = min(args[1], MAX_AUX_STRINGS);
                         Serial.print("GESTURE AUX #"); Serial.println(b->aux.auxstring);
                         break;
                     case ButtonAction::kI2CStr:
