@@ -102,7 +102,7 @@
 #endif
 
 #ifndef LONG_PRESS_TIME
-#define LONG_PRESS_TIME      3000
+#define LONG_PRESS_TIME      1000
 #endif
 
 #ifndef MAX_AUX_STRINGS
