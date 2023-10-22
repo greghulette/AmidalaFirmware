@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////
 // The command I issue on my computer to load the sketch.  
-"/Users/gregoryhulette/Library/Arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/bin/avrdude" "-C/Users/gregoryhulette/Library/Arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/etc/avrdude.conf" -v -V -patmega2560 -cavr109 "-P/dev/cu.usbserial-AB6ZMBRD" -b115200 -D "-Uflash:w:/Users/gregoryhulette/Documents/GitHub/Arduino-Code/AmidalaFirmware/build/arduino.avr.mega/AmidalaFirmware.ino.hex:i"
+// "/Users/gregoryhulette/Library/Arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/bin/avrdude" "-C/Users/gregoryhulette/Library/Arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/etc/avrdude.conf" -v -V -patmega2560 -cavr109 "-P/dev/cu.usbserial-AB6ZMBRD" -b115200 -D "-Uflash:w:/Users/gregoryhulette/Documents/GitHub/Arduino-Code/AmidalaFirmware/build/arduino.avr.mega/AmidalaFirmware.ino.hex:i"
 ///////////////////////////////////////////////
 
 #define FIRMWARE_NAME F("Amidala RC")
@@ -102,7 +102,7 @@
 #endif
 
 #ifndef LONG_PRESS_TIME
-#define LONG_PRESS_TIME      1000
+#define LONG_PRESS_TIME      4000
 #endif
 
 #ifndef MAX_AUX_STRINGS
